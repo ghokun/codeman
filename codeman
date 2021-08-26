@@ -1,0 +1,96 @@
+#!/bin/bash
+set -e
+source .env
+
+################################################################################
+# Utils                                                                        #
+################################################################################
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+function red {
+  printf "${RED}$@${NC}\n"
+}
+
+function green {
+  printf "${GREEN}$@${NC}\n"
+}
+
+function yellow {
+  printf "${YELLOW}$@${NC}\n"
+}
+PREFIX=$(green 'CODEMAN >')
+
+################################################################################
+# Commands                                                                     #
+################################################################################
+help() {
+  echo "Codeman is an utility to manage code-server instances"
+  echo
+  echo "Commands:"
+  echo
+  echo "  init :"
+  echo "   add :"
+  echo "  list :"
+  echo "remove :"
+}
+
+check() {
+  for var in "$@"; do
+    if [! command -v "${var}" &>/dev/null]; then
+      echo "${var} could not be found"
+      exit
+    fi
+  done
+}
+
+init() {
+  check docker docker-compose mkcert
+  case $1 in
+  --skip-cert-generation)
+    echo "${PREFIX} Skipping certificate generation"
+    ;;
+  *)
+    echo "${PREFIX} Creating certificates for domain *.${DOMAIN}"
+    rm -r certs
+    mkdir -p certs
+    mkcert -key-file ./certs/tls.key -cert-file ./certs/tls.crt "*.${DOMAIN}"
+    ;;
+  esac
+
+  echo "${PREFIX} Creating dashboard"
+  docker-compose -f docker-compose.yml up -d
+}
+
+add() {
+  echo "add"
+}
+
+list() {
+  echo "list"
+}
+
+remove() {
+  echo "remove"
+}
+
+case $1 in
+init)
+  "$@"
+  exit
+  ;;
+add)
+  "$@"
+  exit
+  ;;
+remove)
+  "$@"
+  exit
+  ;;
+*)
+  help
+  exit
+  ;;
+esac
