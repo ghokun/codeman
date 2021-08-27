@@ -22,6 +22,7 @@ function yellow {
   printf "${YELLOW}$@${NC}\n"
 }
 PREFIX=$(green 'CODEMAN >')
+PREFIX_ERROR=$(red 'CODEMAN >')
 
 ################################################################################
 # Commands                                                                     #
@@ -40,7 +41,7 @@ help() {
 check() {
   for var in "$@"; do
     if ! command -v ${var} &>/dev/null; then
-      echo ${var} could not be found
+      echo "${PREFIX_ERROR} ${var} could not be found"
       exit
     fi
   done
@@ -48,8 +49,7 @@ check() {
 
 init() {
   # Check local dependencies
-  check docker docker-compose mkcert htpasswd
-
+  check docker mkcert htpasswd
   # Generate certificates
   case $1 in
   --skip-cert-generation)
@@ -69,22 +69,41 @@ init() {
 
   # Create traefik dashboard
   echo "${PREFIX} Creating dashboard"
-  cat dashboard.yml |
-    sed --expression="s/{{NETWORK_NAME}}/${NETWORK_NAME}/g" |
-    docker-compose -p dashboard -f - up -d
+
+  docker run -d -it \
+    --name dashboard \
+    --network=${NETWORK_NAME} \
+    -p 80:80 \
+    -p 443:443 \
+    -v "/var/run/docker.sock:/var/run/docker.sock:ro" \
+    -v "$PWD/certs/:/certs/:ro" \
+    -v "$PWD/traefik/conf.yml:/etc/traefik/dynamic_conf/conf.yml:ro" \
+    --label "codeman-dashboard" \
+    --label "traefik.enable=true" \
+    --label "traefik.http.routers.traefik.rule=Host(\`dashboard.${DOMAIN}\`)" \
+    --label "traefik.http.routers.traefik.service=api@internal" \
+    --label "traefik.http.routers.traefik.tls=true" \
+    --label "traefik.http.routers.traefik.entrypoints=websecure" \
+    --label "traefik.http.routers.http-catchall.rule=hostregexp(\`{host:.+}\`)" \
+    --label "traefik.http.routers.http-catchall.entrypoints=web" \
+    --label "traefik.http.routers.http-catchall.middlewares=redirect-to-https" \
+    --label "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https" \
+    traefik:latest \
+    --entrypoints.web.address=:80 \
+    --entrypoints.websecure.address=:443 \
+    --providers.docker \
+    --providers.docker.exposedByDefault=false \
+    --api \
+    --providers.file.directory=/etc/traefik/dynamic_conf \
+    --providers.file.watch=true
 }
 
 add() {
   # Check local dependencies
-  check docker docker-compose
+  check docker
 
   echo "${PREFIX} Creating code-server and novnc"
-  # cat templates/apps.yml |
-  #   sed --expression="s/{{APP}}/${1}/g" |
-  #   sed --expression="s/{{NETWORK_NAME}}/${NETWORK_NAME}/g" |
-  #   docker-compose -p ${1} -f - up -d
-
-  docker run --privileged -d -it --init \
+  docker run --privileged -d -it \
     --gpus=0 \
     --user="$(id -u):$(id -g)" \
     --name ${1}-code-server \
@@ -92,7 +111,7 @@ add() {
     -e PASSWORD=123456 \
     -e DISPLAY=${1}-novnc:0.0 \
     -e NVIDIA_VISIBLE_DEVICES=0 \
-    --label 'code-server' \
+    --label 'codeman-code-server' \
     --label 'traefik.enable=true' \
     --label "traefik.http.services.${1}-code-server.loadbalancer.server.port=8080" \
     --label "traefik.http.routers.${1}-code-server.rule=Host(\`${1}-code-server.${DOMAIN}\`)" \
@@ -107,7 +126,7 @@ add() {
     -e DISPLAY_HEIGHT=768 \
     -e RUN_XTERM=no \
     -e RUN_FLUXBOX=yes \
-    --label 'novnc' \
+    --label 'codeman-novnc' \
     --label 'traefik.enable=true' \
     --label "traefik.http.services.${1}-novnc.loadbalancer.server.port=8080" \
     --label "traefik.http.routers.${1}-novnc.rule=Host(\`${1}-novnc.${DOMAIN}\`)" \
@@ -122,7 +141,7 @@ add() {
 
 list() {
   # Check local dependencies
-  check docker docker-compose
+  check docker
 
   echo "${PREFIX} Dashboard"
   docker ps -f label=dashboard
@@ -139,7 +158,7 @@ list() {
 
 remove() {
   # Check local dependencies
-  check docker docker-compose
+  check docker
 
   # Destroy containers
   echo "${PREFIX} Destroying containers ${1}-code-server and ${1}-novnc"
@@ -154,9 +173,9 @@ destroy() {
     check docker
 
     echo "${PREFIX} Destroying containers"
-    docker container rm -f $(docker ps -a -q -f label=dashboard) || true
-    docker container rm -f $(docker ps -a -q -f label=code-server) || true
-    docker container rm -f $(docker ps -a -q -f label=novnc) || true
+    docker container rm -f $(docker ps -a -q -f label=codeman-dashboard) || true
+    docker container rm -f $(docker ps -a -q -f label=codeman-code-server) || true
+    docker container rm -f $(docker ps -a -q -f label=codeman-novnc) || true
 
     echo "${PREFIX} Destroying network"
     docker network rm ${NETWORK_NAME}
