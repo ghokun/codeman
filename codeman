@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 source .env
 
@@ -39,15 +39,18 @@ help() {
 
 check() {
   for var in "$@"; do
-    if [! command -v "${var}" &>/dev/null]; then
-      echo "${var} could not be found"
+    if ! command -v ${var} &>/dev/null; then
+      echo ${var} could not be found
       exit
     fi
   done
 }
 
 init() {
-  check docker docker-compose mkcert
+  # Check local dependencies
+  check docker docker-compose mkcert htpasswd
+
+  # Generate certificates
   case $1 in
   --skip-cert-generation)
     echo "${PREFIX} Skipping certificate generation"
@@ -60,20 +63,106 @@ init() {
     ;;
   esac
 
+  # Create network
+  echo "${PREFIX} Creating ${NETWORK_NAME} network"
+  docker network create --driver bridge ${NETWORK_NAME} || true
+
+  # Create traefik dashboard
   echo "${PREFIX} Creating dashboard"
-  docker-compose -f docker-compose.yml up -d
+  cat dashboard.yml |
+    sed --expression="s/{{NETWORK_NAME}}/${NETWORK_NAME}/g" |
+    docker-compose -p dashboard -f - up -d
 }
 
 add() {
-  echo "add"
+  # Check local dependencies
+  check docker docker-compose
+
+  echo "${PREFIX} Creating code-server and novnc"
+  # cat templates/apps.yml |
+  #   sed --expression="s/{{APP}}/${1}/g" |
+  #   sed --expression="s/{{NETWORK_NAME}}/${NETWORK_NAME}/g" |
+  #   docker-compose -p ${1} -f - up -d
+
+  docker run --privileged -d -it --init \
+    --gpus=0 \
+    --user="$(id -u):$(id -g)" \
+    --name ${1}-code-server \
+    --network=${NETWORK_NAME} \
+    -e PASSWORD=123456 \
+    -e DISPLAY=${1}-novnc:0.0 \
+    -e NVIDIA_VISIBLE_DEVICES=0 \
+    --label 'code-server' \
+    --label 'traefik.enable=true' \
+    --label "traefik.http.services.${1}-code-server.loadbalancer.server.port=8080" \
+    --label "traefik.http.routers.${1}-code-server.rule=Host(\`${1}-code-server.${DOMAIN}\`)" \
+    --label "traefik.http.routers.${1}-code-server.entrypoints=websecure" \
+    --label "traefik.http.routers.${1}-code-server.tls=true" \
+    codeman-demo:latest
+
+  docker run -d -it --init \
+    --name ${1}-novnc \
+    --network=${NETWORK_NAME} \
+    -e DISPLAY_WIDTH=1024 \
+    -e DISPLAY_HEIGHT=768 \
+    -e RUN_XTERM=no \
+    -e RUN_FLUXBOX=yes \
+    --label 'novnc' \
+    --label 'traefik.enable=true' \
+    --label "traefik.http.services.${1}-novnc.loadbalancer.server.port=8080" \
+    --label "traefik.http.routers.${1}-novnc.rule=Host(\`${1}-novnc.${DOMAIN}\`)" \
+    --label "traefik.http.routers.${1}-novnc.entrypoints=websecure" \
+    --label "traefik.http.routers.${1}-novnc.tls=true" \
+    theasp/novnc:latest
+
+  echo "${PREFIX} code-server address   : https://${1}-code-server.${DOMAIN}"
+  echo "${PREFIX} code-server password  : ${PASSWORD}"
+  echo "${PREFIX} novnc address         : https://${1}-novnc.${DOMAIN}/vnc.html"
 }
 
 list() {
-  echo "list"
+  # Check local dependencies
+  check docker docker-compose
+
+  echo "${PREFIX} Dashboard"
+  docker ps -f label=dashboard
+  echo
+
+  echo "${PREFIX} Code Server Containers"
+  docker ps -f label=code-server
+  echo
+
+  echo "${PREFIX} noVNC Containers"
+  docker ps -f label=novnc
+  echo
 }
 
 remove() {
-  echo "remove"
+  # Check local dependencies
+  check docker docker-compose
+
+  # Destroy containers
+  echo "${PREFIX} Destroying containers ${1}-code-server and ${1}-novnc"
+  docker container rm -f ${1}-code-server || true
+  docker container rm -f ${1}-novnc || true
+}
+
+destroy() {
+  read -p "${PREFIX} This destroys everyhing. Are you sure? (y/N) " -r
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Check local dependencies
+    check docker
+
+    echo "${PREFIX} Destroying containers"
+    docker container rm -f $(docker ps -a -q -f label=dashboard) || true
+    docker container rm -f $(docker ps -a -q -f label=code-server) || true
+    docker container rm -f $(docker ps -a -q -f label=novnc) || true
+
+    echo "${PREFIX} Destroying network"
+    docker network rm ${NETWORK_NAME}
+  else
+    echo "${PREFIX} No harm done"
+  fi
 }
 
 case $1 in
@@ -85,7 +174,15 @@ add)
   "$@"
   exit
   ;;
+list)
+  "$@"
+  exit
+  ;;
 remove)
+  "$@"
+  exit
+  ;;
+destroy)
   "$@"
   exit
   ;;

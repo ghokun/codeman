@@ -1,13 +1,12 @@
-version: '3.8'
+version: '2.3'
 
 networks:
-  traefik-network:
-    name: traefik-network
-    driver: bridge
+  {{NETWORK_NAME}}:
+    external: true
 
 services:
   traefik:
-    image: 'traefik:v2.0.0'
+    image: 'traefik:latest'
     container_name: 'dashboard'
     command:
       - --entrypoints.web.address=:80
@@ -25,6 +24,7 @@ services:
       - ./certs/:/certs/:ro
       - ./traefik/conf.yml:/etc/traefik/dynamic_conf/conf.yml:ro
     labels:
+      - 'dashboard'
       - 'traefik.enable=true'
       # Dashboard
       - 'traefik.http.routers.traefik.rule=Host(`dashboard.${DOMAIN}`)'
@@ -40,4 +40,4 @@ services:
       # middleware redirect
       - 'traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https'
     networks:
-      - traefik-network
+      - ${NETWORK_NAME}
